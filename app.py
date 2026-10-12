@@ -1,3 +1,83 @@
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+import io
+
+st.set_page_config(page_title="금화 수입육 통합 ERP (커스텀 비용항목 반영)", page_icon="🏢", layout="wide", initial_sidebar_state="expanded")
+
+st.markdown('''
+<style>
+body { font-family: 'Malgun Gothic', sans-serif; background-color: #f3f4f6; }
+.erp-header { background-color: #1c3d5a; color: white; padding: 15px 20px; font-size: 1.5rem; font-weight: bold; border-radius: 5px; margin-bottom: 20px; }
+.section-title { font-size: 1.1rem; font-weight: 600; color: #333; border-bottom: 2px solid #1c3d5a; padding-bottom: 8px; margin-bottom: 15px; margin-top: 20px; }
+.stMetric { background-color: #fff; padding: 15px; border-radius: 4px; border: 1px solid #ddd; border-top: 3px solid #1c3d5a; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
+div[data-testid="stForm"] { background-color: #fff; border: 1px solid #ddd; padding: 20px; border-radius: 4px; }
+</style>
+''', unsafe_allow_html=True)
+
+st.markdown('<div class="erp-header">🏢 금화 수입육 관리 시스템 (제비용 커스텀 V7)</div>', unsafe_allow_html=True)
+
+def fix_dtypes():
+    num_cols_po = ['계약환율', '외화금액(USD)', '수입량(Kg)', '원료육대금(원)', '적하보험료(원)', '포워딩비용(원)', '관세비용(원)', '보세창고비용(원)', '제비용(원)', '총원가(원)', 'Kg당단가(원)']
+    if not st.session_state.po_master.empty:
+        for c in num_cols_po:
+            if c in st.session_state.po_master.columns:
+                st.session_state.po_master[c] = pd.to_numeric(st.session_state.po_master[c], errors='coerce').fillna(0)
+    
+    num_cols_tx = ['출고수량(Kg)', '적용단가', '출고금액(원)']
+    if not st.session_state.transactions.empty:
+        for c in num_cols_tx:
+            if c in st.session_state.transactions.columns:
+                st.session_state.transactions[c] = pd.to_numeric(st.session_state.transactions[c], errors='coerce').fillna(0)
+        try:
+            st.session_state.transactions['출고일자'] = pd.to_datetime(st.session_state.transactions['출고일자']).dt.strftime('%Y-%m-%d')
+            st.session_state.transactions.sort_values(by='출고일자', inplace=True)
+            st.session_state.transactions.reset_index(drop=True, inplace=True)
+        except: pass
+
+def auto_migrate_raw_excel(uploaded_file):
+    try:
+        xls = pd.ExcelFile(uploaded_file)
+        po_master_list = []
+        if '수입비용' in xls.sheet_names:
+            df_cost = pd.read_excel(xls, sheet_name='수입비용', header=None)
+            for col_idx in range(1, df_cost.shape[1]):
+                po_val = df_cost.iloc[2, col_idx]
+                if pd.isna(po_val): continue
+                po_no = str(po_val).strip()
+                if po_no == '' or po_no == 'nan': continue
+                if 'PO' not in po_no.upper(): po_no = f"PO-{po_no}"
+                    
+                import_kg = df_cost.iloc[15, col_idx]
+                import_kg_num = pd.to_numeric(import_kg, errors='coerce')
+                
+                meat_cost = pd.to_numeric(df_cost.iloc[29:46, col_idx], errors='coerce').fillna(0).sum()
+                insurance = pd.to_numeric(df_cost.iloc[47, col_idx], errors='coerce')
+                insurance = insurance if pd.notna(insurance) else 0
+                forwarding = pd.to_numeric(df_cost.iloc[49:67, col_idx], errors='coerce').fillna(0).sum()
+                customs = pd.to_numeric(df_cost.iloc[68:76, col_idx], errors='coerce').fillna(0).sum()
+                storage = pd.to_numeric(df_cost.iloc[76:85, col_idx], errors='coerce').fillna(0).sum()
+                
+                total_expenses = insurance + forwarding + customs + storage
+                total_cost = meat_cost + total_expenses
+                
+                unit_price = total_cost / import_kg_num if pd.notna(import_kg_num) and import_kg_num > 0 else 0
+                
+                ct_date = df_cost.iloc[4, col_idx]
+                cc_date = df_cost.iloc[87, col_idx]
+                
+                po_master_list.append({
+                    '계약일자': str(ct_date)[:10] if pd.notna(ct_date) else '',
+                    'PO번호': po_no,
+                    '원산지': str(df_cost.iloc[11, col_idx]) if pd.notna(df_cost.iloc[11, col_idx]) else '',
+                    '품목명(CL)': str(df_cost.iloc[3, col_idx]) if pd.notna(df_cost.iloc[3, col_idx]) else '',
+                    '계약환율': pd.to_numeric(df_cost.iloc[5, col_idx], errors='coerce'),
+                    '외화금액(USD)': pd.to_numeric(df_cost.iloc[24, col_idx], errors='coerce'),
+                    '수입량(Kg)': import_kg_num,
+                    '통관일자': str(cc_date)[:10] if pd.notna(cc_date) else '',
+                    '원료육대금(원)': meat_cost, '적하보험료(원)': insurance, '포워딩비용(원)': forwarding,
+                    '관세비용(원)': customs, '보세창고비용(원)': storage, '제비용(원)': total_expenses,
+                    '총원가(원)': total_cost, 'Kg당단가(원)': unit_price
                 })
         
         tx_list = []
@@ -229,23 +309,4 @@ elif menu.startswith("3"):
                 "[타계정대체] 수량": etc_kg, "[타계정대체] 금액": etc_amt,
                 "[당월재고] 수량": rem_kg, "[당월재고] 금액": rem_amt
             })
-        st.dataframe(pd.DataFrame(report_data).style.format({col: "{:,.0f}" if '금액' in col else "{:,.1f}" for col in pd.DataFrame(report_data).columns if '수량' in col or '단가' in col or '금액' in col}), use_container_width=True)
-
-elif menu.startswith("4"):
-    st.markdown('<div class="section-title">■ 경영/총괄 관리 > 전사 재고 자산 현황</div>', unsafe_allow_html=True)
-    if not st.session_state.po_master.empty:
-        total_in_kg = st.session_state.po_master['수입량(Kg)'].sum(); total_out_kg = st.session_state.transactions['출고수량(Kg)'].sum()
-        total_in_amt = st.session_state.po_master['총원가(원)'].sum(); total_out_amt = st.session_state.transactions['출고금액(원)'].sum()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("📦 창고 실재고 총합", f"{total_in_kg - total_out_kg:,.1f} Kg")
-        c2.metric("💰 현재고 자산총액", f"{total_in_amt - total_out_amt:,.0f} 원")
-        c3.metric("📈 전체 출고(사용)량", f"{total_out_kg:,.1f} Kg")
-        
-        summary = st.session_state.transactions.groupby('PO번호').agg(출고합_Kg=('출고수량(Kg)', 'sum'), 출고합_원=('출고금액(원)', 'sum')).reset_index()
-        dash_df = pd.merge(st.session_state.po_master[['PO번호', '원산지', '품목명(CL)', '수입량(Kg)', '총원가(원)']], summary, on='PO번호', how='left').fillna(0)
-        dash_df['잔여재고(Kg)'] = dash_df['수입량(Kg)'] - dash_df['출고합_Kg']
-        dash_df['잔여자산(원)'] = dash_df['총원가(원)'] - dash_df['출고합_원']
-        
-        dash_df = dash_df[dash_df['잔여재고(Kg)'] > 0.1].drop(columns=['수입량(Kg)', '총원가(원)', '출고합_Kg', '출고합_원'])
-        st.markdown("##### 📌 원산지/품목별 상세 잔액")
-        st.dataframe(dash_df.style.format({"잔여재고(Kg)":"{:,.1f}", "잔여자산(원)":"{:,.0f}"}), use_container_width=True)
+        st.dataframe(pd.DataFrame(report
