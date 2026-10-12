@@ -4,7 +4,7 @@ from datetime import datetime
 import io
 import json
 
-st.set_page_config(page_title="금화 수입육 통합 ERP", page_icon="🏢", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="금화 수입육 통합 ERP (WEHAGO Professional)", page_icon="🏢", layout="wide", initial_sidebar_state="expanded")
 
 try:
     import gspread
@@ -15,15 +15,46 @@ except ImportError:
 
 st.markdown('''
 <style>
-body { font-family: 'Malgun Gothic', sans-serif; background-color: #f3f4f6; }
-.erp-header { background-color: #1c3d5a; color: white; padding: 15px 20px; font-size: 1.5rem; font-weight: bold; border-radius: 5px; margin-bottom: 20px; }
-.section-title { font-size: 1.1rem; font-weight: 600; color: #333; border-bottom: 2px solid #1c3d5a; padding-bottom: 8px; margin-bottom: 15px; margin-top: 20px; }
-.stMetric { background-color: #fff; padding: 15px; border-radius: 4px; border: 1px solid #ddd; border-top: 3px solid #1c3d5a; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-div[data-testid="stForm"] { background-color: #fff; border: 1px solid #ddd; padding: 20px; border-radius: 4px; }
+body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; background-color: #f4f6f9; color: #333333; }
+.wehago-header {
+    background: linear-gradient(135deg, #1c3d5a 0%, #112233 100%);
+    color: white;
+    padding: 12px 20px;
+    font-size: 1.3rem;
+    font-weight: bold;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+.wehago-header span { font-size: 0.85rem; font-weight: normal; color: #a0aec0; }
+.section-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #1c3d5a;
+    border-bottom: 2px solid #1c3d5a;
+    padding-bottom: 6px;
+    margin-bottom: 15px;
+    margin-top: 15px;
+}
+div[data-testid="stForm"] {
+    background-color: #ffffff;
+    border: 1px solid #dcdcdc;
+    padding: 20px;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+}
 </style>
 ''', unsafe_allow_html=True)
 
-st.markdown('<div class="erp-header">🏢 금화 수입육 관리 시스템 (표준 인수인계 버전)</div>', unsafe_allow_html=True)
+st.markdown('''
+<div class="wehago-header">
+    🏢 [금화 주식회사] 수입육 통합 ERP 회계 시스템
+    <span>[ WEHAGO Professional Edition ]</span>
+</div>
+''', unsafe_allow_html=True)
 
 if not GSPREAD_AVAILABLE:
     st.error("🚨 필수 라이브러리가 누락되었습니다! GitHub의 `requirements.txt` 파일에 `gspread` 와 `google-auth` 를 추가해 주세요.")
@@ -141,8 +172,8 @@ if 'db_loaded' not in st.session_state:
     sync_from_gs()
 
 with st.sidebar:
-    st.markdown("### 📋 업무 메뉴얼 (인수인계용)")
-    menu = st.radio("작업 영역 선택", [
+    st.markdown("### 📊 WEHAGO 모듈 선택")
+    menu = st.radio("업무 영역", [
         "0. [초기세팅] 시스템 데이터 일괄 마이그레이션",
         "1. [1단계] 수입 고기 및 제비용 등록", 
         "2. [2단계] 공장 생산 출고일보 입력", 
@@ -152,10 +183,10 @@ with st.sidebar:
     ])
     
     st.divider()
-    st.markdown("### ☁️ 클라우드 동기화")
-    if st.button("🔄 최신 장부 불러오기", use_container_width=True):
+    st.markdown("### ☁️ 데이터베이스 동기화")
+    if st.button("🔄 클라우드 장부 동기화", use_container_width=True):
         sync_from_gs()
-        st.success("최신 데이터 동기화 완료!")
+        st.success("최신 장부 동기화 완료!")
         st.rerun()
 
 def auto_migrate_raw_excel(uploaded_file):
@@ -261,7 +292,7 @@ if menu.startswith("0."):
                 else: st.error(f"변환 중 오류 발생: {po_cnt}")
 
 elif menu.startswith("1."):
-    st.markdown('<div class="section-title">■ [1단계] 수입 고기 및 제비용 등록</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">■ [1단계] 수입 고기 및 제비용 등록 (매입 관리)</div>', unsafe_allow_html=True)
     st.info("💡 해외에서 수입한 고기의 계약 정보와 통관 시 발생한 제비용(원료육, 보험, 포워딩, 관세, 보세창고)을 입력하여 1Kg당 원가 단가를 확정하는 단계입니다.")
     
     enforce_columns()
@@ -308,7 +339,7 @@ elif menu.startswith("1."):
         with c12: customs = st.number_input("관세비용 (원)", value=d_cust, step=10000)
         with c13: storage = st.number_input("보세창고 비용 (원)", value=d_stor, step=10000)
         
-        submit_po = st.form_submit_button("저장 및 원가 단가 확정", type="primary")
+        submit_po = st.form_submit_button("전표 발행 및 원가 단가 확정", type="primary")
         if submit_po and po_no and import_kg > 0:
             total_expenses = insurance + forwarding + customs + storage
             total_cost = meat_cost + total_expenses
@@ -337,7 +368,7 @@ elif menu.startswith("1."):
         st.dataframe(st.session_state.po_master.style.format({col: "{:,.0f}" for col in display_cols}), hide_index=True, use_container_width=True)
 
 elif menu.startswith("2."):
-    st.markdown('<div class="section-title">■ [2단계] 공장 생산 출고일보 입력</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">■ [2단계] 공장 생산 출고일보 입력 (수불 전표)</div>', unsafe_allow_html=True)
     st.info("💡 공장에서 생산 투입을 위해 고기를 불출하거나 타계정으로 대체(폐기/판매 등)한 내역을 일자별로 등록하여 재고를 차감하는 단계입니다.")
     
     enforce_columns()
@@ -370,7 +401,7 @@ elif menu.startswith("2."):
             st.dataframe(st.session_state.transactions, hide_index=True, use_container_width=True, column_config={"출고수량(Kg)": st.column_config.NumberColumn(format="%,.1f"), "적용단가": st.column_config.NumberColumn(format="%,.2f"), "출고금액(원)": st.column_config.NumberColumn(format="%,.0f")})
 
 elif menu.startswith("3."):
-    st.markdown('<div class="section-title">■ [3단계] 월말 결산 수불명세서 출력</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">■ [3단계] 월말 결산 수불명세서 출력 (회계 장부)</div>', unsafe_allow_html=True)
     st.info("💡 품목(CL)별로 매입, 당월불출, 타계정대체, 월말재고 수량 및 금액을 더존 회계 양식으로 조회하고 결산에 활용하는 단계입니다.")
     
     enforce_columns()
@@ -428,7 +459,7 @@ elif menu.startswith("4."):
         st.dataframe(dash_df.style.format({"잔여재고(Kg)":"{:,.1f}", "잔여자산(원)":"{:,.0f}"}), hide_index=True, use_container_width=True)
 
 elif menu.startswith("5."):
-    st.markdown('<div class="section-title">■ [검증] 실무진 엑셀 오차 검사하기</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">■ [검증] 실무진 엑셀 오차 검사하기 (크로스체크)</div>', unsafe_allow_html=True)
     st.info("💡 실무진이 작성한 '생산일보 엑셀' 파일을 업로드하면, 시스템 장부와 1:1로 자동 대조하여 오차가 있는 항목을 빨간색으로 즉시 찾아냅니다.")
     
     check_file = st.file_uploader("검증할 현장 실무진 엑셀 업로드", type=['xlsx'])
@@ -468,4 +499,4 @@ elif menu.startswith("5."):
                         if not errors.empty: st.error(f"🚨 총 {len(errors)}개의 PO에서 장부와 현장 보고 수량 간의 불일치가 발견되었습니다! 빨간색으로 표시된 오차를 확인하세요.")
                         else: st.success("✅ 완벽합니다! 시스템 장부의 모든 출고량 데이터가 현장 실무진 엑셀 데이터와 100% 일치합니다.")
                 except Exception as e:
-                    st.error(f"엑셀 분석 중 오류 발생: {e}")
+                    st.error(f"엑셀 분석 중 오류 정비 필요: {e}")
