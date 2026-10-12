@@ -24,13 +24,29 @@ div[data-testid="stForm"] { background-color: #fff; border: 1px solid #ddd; padd
 </style>
 ''', unsafe_allow_html=True)
 
-st.markdown('<div class="erp-header">☁️ 금화 수입육 관리 시스템 (구글 클라우드 DB V9.1)</div>', unsafe_allow_html=True)
+st.markdown('<div class="erp-header">☁️ 금화 수입육 관리 시스템 (구글 클라우드 DB V9.2)</div>', unsafe_allow_html=True)
 
 if not GSPREAD_AVAILABLE:
     st.error("🚨 필수 라이브러리가 누락되었습니다! GitHub의 `requirements.txt` 파일에 `gspread` 와 `google-auth` 를 추가해 주세요.")
     st.stop()
 
+# --- 데이터프레임 구조 강제 생성 함수 (에러 원천 차단) ---
+def init_session_state():
+    if 'po_master' not in st.session_state or not isinstance(st.session_state.po_master, pd.DataFrame):
+        st.session_state.po_master = pd.DataFrame(columns=[
+            '계약일자', 'PO번호', '원산지', '품목명(CL)', '계약환율', '외화금액(USD)', 
+            '수입량(Kg)', '통관일자', '원료육대금(원)', '적하보험료(원)', '포워딩비용(원)', '관세비용(원)', '보세창고비용(원)', 
+            '제비용(원)', '총원가(원)', 'Kg당단가(원)'
+        ])
+    if 'transactions' not in st.session_state or not isinstance(st.session_state.transactions, pd.DataFrame):
+        st.session_state.transactions = pd.DataFrame(columns=[
+            '출고일자', '구분', '원산지', 'PO번호', '품목명(CL)', '출고수량(Kg)', '적용단가', '출고금액(원)', '비고'
+        ])
+
+init_session_state()
+
 def enforce_columns():
+    init_session_state()
     expected_po = ['계약일자', 'PO번호', '원산지', '품목명(CL)', '계약환율', '외화금액(USD)', '수입량(Kg)', '통관일자', '원료육대금(원)', '적하보험료(원)', '포워딩비용(원)', '관세비용(원)', '보세창고비용(원)', '제비용(원)', '총원가(원)', 'Kg당단가(원)']
     for col in expected_po:
         if col not in st.session_state.po_master.columns:
@@ -51,7 +67,6 @@ def get_gs_client():
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"구글 인증 실패: {e}")
         return None
 
 def sync_from_gs():
@@ -61,47 +76,52 @@ def sync_from_gs():
         sheet = client.open("금화_수입육장부")
         try:
             ws_po = sheet.worksheet("PO마스터")
-            st.session_state.po_master = pd.DataFrame(ws_po.get_all_records())
+            data_po = ws_po.get_all_records()
+            if data_po:
+                st.session_state.po_master = pd.DataFrame(data_po)
         except gspread.exceptions.WorksheetNotFound:
             sheet.add_worksheet(title="PO마스터", rows="1000", cols="20")
-            st.session_state.po_master = pd.DataFrame(columns=[
-                '계약일자', 'PO번호', '원산지', '품목명(CL)', '계약환율', '외화금액(USD)', 
-                '수입량(Kg)', '통관일자', '원료육대금(원)', '적하보험료(원)', '포워딩비용(원)', '관세비용(원)', '보세창고비용(원)', 
-                '제비용(원)', '총원가(원)', 'Kg당단가(원)'
-            ])
             
         try:
             ws_tx = sheet.worksheet("수불부")
-            st.session_state.transactions = pd.DataFrame(ws_tx.get_all_records())
+            data_tx = ws_tx.get_all_records()
+            if data_tx:
+                st.session_state.transactions = pd.DataFrame(data_tx)
         except gspread.exceptions.WorksheetNotFound:
             sheet.add_worksheet(title="수불부", rows="10000", cols="20")
-            st.session_state.transactions = pd.DataFrame(columns=[
-                '출고일자', '구분', '원산지', 'PO번호', '품목명(CL)', '출고수량(Kg)', '적용단가', '출고금액(원)', '비고'
-            ])
+            
         enforce_columns()
         fix_dtypes()
     except Exception as e:
-        st.error(f"데이터베이스 로드 중 오류: {e}")
+        pass
 
 def sync_to_gs():
     client = get_gs_client()
     if not client: return
     try:
         sheet = client.open("금화_수입육장부")
+        enforce_columns()
         
-        ws_po = sheet.worksheet("PO마스터")
+        try:
+            ws_po = sheet.worksheet("PO마스터")
+        except gspread.exceptions.WorksheetNotFound:
+            ws_po = sheet.add_worksheet(title="PO마스터", rows="1000", cols="20")
         ws_po.clear()
         po_data = [st.session_state.po_master.columns.values.tolist()] + st.session_state.po_master.fillna("").values.tolist()
         ws_po.update(values=po_data, range_name='A1')
         
-        ws_tx = sheet.worksheet("수불부")
+        try:
+            ws_tx = sheet.worksheet("수불부")
+        except gspread.exceptions.WorksheetNotFound:
+            ws_tx = sheet.add_worksheet(title="수불부", rows="10000", cols="20")
         ws_tx.clear()
         tx_data = [st.session_state.transactions.columns.values.tolist()] + st.session_state.transactions.fillna("").values.tolist()
         ws_tx.update(values=tx_data, range_name='A1')
     except Exception as e:
-        st.error(f"구글 시트 저장 실패 (API 한도 초과 등): {e}")
+        st.error(f"구글 시트 저장 실패: {e}")
 
 def fix_dtypes():
+    init_session_state()
     num_cols_po = ['계약환율', '외화금액(USD)', '수입량(Kg)', '원료육대금(원)', '적하보험료(원)', '포워딩비용(원)', '관세비용(원)', '보세창고비용(원)', '제비용(원)', '총원가(원)', 'Kg당단가(원)']
     if not st.session_state.po_master.empty:
         for c in num_cols_po:
@@ -119,7 +139,7 @@ def fix_dtypes():
             st.session_state.transactions.reset_index(drop=True, inplace=True)
         except: pass
 
-# --- 앱 실행 시 무조건 구글 시트에서 최신 데이터 로드 ---
+# --- 앱 실행 시 구글 시트에서 최신 데이터 로드 ---
 if 'db_loaded' not in st.session_state:
     st.session_state.db_loaded = True
     sync_from_gs()
@@ -246,11 +266,11 @@ if menu.startswith("0"):
 elif menu.startswith("1"):
     st.markdown('<div class="section-title">■ 수입/구매 관리 > 수입육 PO 원가 및 제비용 등록</div>', unsafe_allow_html=True)
     
-    if 'PO번호' in st.session_state.po_master.columns and not st.session_state.po_master.empty:
+    enforce_columns()
+    po_list = []
+    if not st.session_state.po_master.empty and 'PO번호' in st.session_state.po_master.columns:
         po_list = st.session_state.po_master['PO번호'].dropna().astype(str).tolist()
-        existing_pos = ["(+) 신규 PO 등록"] + [p for p in po_list if p.strip() != ""]
-    else:
-        existing_pos = ["(+) 신규 PO 등록"]
+    existing_pos = ["(+) 신규 PO 등록"] + [p for p in po_list if p.strip() != ""]
         
     selected_action = st.selectbox("진행 상태 선택", existing_pos)
     
@@ -303,11 +323,12 @@ elif menu.startswith("1"):
                 st.session_state.transactions.loc[tx_mask, '출고금액(원)'] = st.session_state.transactions.loc[tx_mask, '출고수량(Kg)'] * unit_price
                 fix_dtypes()
                 sync_to_gs()
-                st.success(f"[{po_no}] 단가 업데이트 완료 (1Kg당 {unit_price:,.2f}원). 구글 시트에 안전하게 기록되었습니다.")
+                st.success(f"[{po_no}] 단가 업데이트 완료. 구글 시트에 안전하게 기록되었습니다.")
             else:
                 if not st.session_state.po_master.empty and po_no in st.session_state.po_master['PO번호'].values: st.error("이미 등록된 PO입니다.")
                 else:
-                    st.session_state.po_master.loc[len(st.session_state.po_master)] = [ct_date.strftime('%Y-%m-%d'), po_no, origin, item_name, ex_rate, usd_amt, import_kg, cc_date.strftime('%Y-%m-%d'), meat_cost, insurance, forwarding, customs, storage, total_expenses, total_cost, unit_price]
+                    new_row = pd.DataFrame([[ct_date.strftime('%Y-%m-%d'), po_no, origin, item_name, ex_rate, usd_amt, import_kg, cc_date.strftime('%Y-%m-%d'), meat_cost, insurance, forwarding, customs, storage, total_expenses, total_cost, unit_price]], columns=st.session_state.po_master.columns)
+                    st.session_state.po_master = pd.concat([st.session_state.po_master, new_row], ignore_index=True)
                     fix_dtypes()
                     sync_to_gs()
                     st.success(f"[{po_no}] 신규 등록 완료. 구글 시트에 안전하게 기록되었습니다.")
@@ -319,12 +340,13 @@ elif menu.startswith("1"):
 
 elif menu.startswith("2"):
     st.markdown('<div class="section-title">■ 생산/재고 관리 > 현장 수불 일보 등록</div>', unsafe_allow_html=True)
+    enforce_columns()
     valid_pos = []
-    if 'PO번호' in st.session_state.po_master.columns and '품목명(CL)' in st.session_state.po_master.columns:
+    if 'PO번호' in st.session_state.po_master.columns and '품목명(CL)' in st.session_state.po_master.columns and not st.session_state.po_master.empty:
         valid_pos = (st.session_state.po_master['PO번호'].astype(str) + " (" + st.session_state.po_master['품목명(CL)'].astype(str) + ")").tolist()
         
     if not valid_pos:
-        st.warning("수입/구매 관리에서 PO를 먼저 등록해주세요.")
+        st.warning("수입/구매 관리에서 PO를 먼저 등록해주세요. (또는 0번 메뉴에서 원본 엑셀을 먼저 이관해주세요)")
     else:
         with st.form("tx_form"):
             c1, c2, c3, c4 = st.columns(4)
@@ -337,7 +359,8 @@ elif menu.startswith("2"):
                 tx_po = selected_po_display.split(" ")[0]
                 po_info = st.session_state.po_master[st.session_state.po_master['PO번호'] == tx_po].iloc[0]
                 unit_price = po_info['Kg당단가(원)']
-                st.session_state.transactions.loc[len(st.session_state.transactions)] = [tx_date.strftime('%Y-%m-%d'), tx_type, po_info['원산지'], tx_po, po_info['품목명(CL)'], tx_kg, unit_price, tx_kg * unit_price, tx_note]
+                new_tx = pd.DataFrame([[tx_date.strftime('%Y-%m-%d'), tx_type, po_info['원산지'], tx_po, po_info['품목명(CL)'], tx_kg, unit_price, tx_kg * unit_price, tx_note]], columns=st.session_state.transactions.columns)
+                st.session_state.transactions = pd.concat([st.session_state.transactions, new_tx], ignore_index=True)
                 fix_dtypes()
                 sync_to_gs()
                 st.success("정상적으로 출고 처리되었으며, 구글 시트에 안전하게 기록되었습니다.")
@@ -348,8 +371,9 @@ elif menu.startswith("2"):
 
 elif menu.startswith("3"):
     st.markdown('<div class="section-title">■ 회계/결산 관리 > 품목별 수불명세서 (더존 양식)</div>', unsafe_allow_html=True)
+    enforce_columns()
     if st.session_state.po_master.empty or '품목명(CL)' not in st.session_state.po_master.columns: 
-        st.info("데이터가 없습니다.")
+        st.info("데이터가 없습니다. 0번 메뉴에서 원본 엑셀을 먼저 이관해 주세요.")
     else:
         cl_list = sorted(list(set(st.session_state.po_master['품목명(CL)'].dropna().tolist())))
         selected_cl = st.selectbox("조회할 품목(CL) 선택", cl_list)
@@ -359,10 +383,14 @@ elif menu.startswith("3"):
         report_data = []
         for index, po in po_filtered.iterrows():
             po_no = po['PO번호']; in_kg = po['수입량(Kg)']; in_price = po['Kg당단가(원)']; in_amt = po['총원가(원)']
-            out_prod = tx_filtered[(tx_filtered['PO번호'] == po_no) & (tx_filtered['구분'] == '당월불출(생산투입)')]
-            prod_kg = out_prod['출고수량(Kg)'].sum(); prod_amt = out_prod['출고금액(원)'].sum()
-            out_etc = tx_filtered[(tx_filtered['PO번호'] == po_no) & (tx_filtered['구분'] == '타계정대체(폐기/판매등)')]
-            etc_kg = out_etc['출고수량(Kg)'].sum(); etc_amt = out_etc['출고금액(원)'].sum()
+            out_prod = tx_filtered[(tx_filtered['PO번호'] == po_no) & (tx_filtered['구분'] == '당월불출(생산투입)')] if not tx_filtered.empty else pd.DataFrame()
+            prod_kg = out_prod['출고수량(Kg)'].sum() if not out_prod.empty else 0
+            prod_amt = out_prod['출고금액(원)'].sum() if not out_prod.empty else 0
+            
+            out_etc = tx_filtered[(tx_filtered['PO번호'] == po_no) & (tx_filtered['구분'] == '타계정대체(폐기/판매등)')] if not tx_filtered.empty else pd.DataFrame()
+            etc_kg = out_etc['출고수량(Kg)'].sum() if not out_etc.empty else 0
+            etc_amt = out_etc['출고금액(원)'].sum() if not out_etc.empty else 0
+            
             rem_kg = in_kg - prod_kg - etc_kg; rem_amt = in_amt - prod_amt - etc_amt
             report_data.append({
                 "PO No": po_no, "원산지": po['원산지'],
@@ -385,22 +413,27 @@ elif menu.startswith("3"):
 
 elif menu.startswith("4"):
     st.markdown('<div class="section-title">■ 경영/총괄 관리 > 전사 재고 자산 현황</div>', unsafe_allow_html=True)
-    if not st.session_state.po_master.empty and not st.session_state.transactions.empty:
-        total_in_kg = st.session_state.po_master['수입량(Kg)'].sum(); total_out_kg = st.session_state.transactions['출고수량(Kg)'].sum()
-        total_in_amt = st.session_state.po_master['총원가(원)'].sum(); total_out_amt = st.session_state.transactions['출고금액(원)'].sum()
+    enforce_columns()
+    if not st.session_state.po_master.empty:
+        total_in_kg = st.session_state.po_master['수입량(Kg)'].sum()
+        total_out_kg = st.session_state.transactions['출고수량(Kg)'].sum() if not st.session_state.transactions.empty else 0
+        total_in_amt = st.session_state.po_master['총원가(원)'].sum()
+        total_out_amt = st.session_state.transactions['출고금액(원)'].sum() if not st.session_state.transactions.empty else 0
+        
         c1, c2, c3 = st.columns(3)
         c1.metric("📦 창고 실재고 총합", f"{total_in_kg - total_out_kg:,.1f} Kg")
         c2.metric("💰 현재고 자산총액", f"{total_in_amt - total_out_amt:,.0f} 원")
         c3.metric("📈 전체 출고(사용)량", f"{total_out_kg:,.1f} Kg")
         
-        summary = st.session_state.transactions.groupby('PO번호').agg(출고합_Kg=('출고수량(Kg)', 'sum'), 출고합_원=('출고금액(원)', 'sum')).reset_index()
-        dash_df = pd.merge(st.session_state.po_master[['PO번호', '원산지', '품목명(CL)', '수입량(Kg)', '총원가(원)']], summary, on='PO번호', how='left').fillna(0)
-        dash_df['잔여재고(Kg)'] = dash_df['수입량(Kg)'] - dash_df['출고합_Kg']
-        dash_df['잔여자산(원)'] = dash_df['총원가(원)'] - dash_df['출고합_원']
-        dash_df = dash_df[dash_df['잔여재고(Kg)'] > 0.1].drop(columns=['수입량(Kg)', '총원가(원)', '출고합_Kg', '출고합_원'])
-        
-        st.markdown("##### 📌 원산지/품목별 상세 잔액")
-        st.dataframe(dash_df.style.format({"잔여재고(Kg)":"{:,.1f}", "잔여자산(원)":"{:,.0f}"}), hide_index=True, use_container_width=True)
+        if not st.session_state.transactions.empty:
+            summary = st.session_state.transactions.groupby('PO번호').agg(출고합_Kg=('출고수량(Kg)', 'sum'), 출고합_원=('출고금액(원)', 'sum')).reset_index()
+            dash_df = pd.merge(st.session_state.po_master[['PO번호', '원산지', '품목명(CL)', '수입량(Kg)', '총원가(원)']], summary, on='PO번호', how='left').fillna(0)
+            dash_df['잔여재고(Kg)'] = dash_df['수입량(Kg)'] - dash_df['출고합_Kg']
+            dash_df['잔여자산(원)'] = dash_df['총원가(원)'] - dash_df['출고합_원']
+            dash_df = dash_df[dash_df['잔여재고(Kg)'] > 0.1].drop(columns=['수입량(Kg)', '총원가(원)', '출고합_Kg', '출고합_원'])
+            
+            st.markdown("##### 📌 원산지/품목별 상세 잔액")
+            st.dataframe(dash_df.style.format({"잔여재고(Kg)":"{:,.1f}", "잔여자산(원)":"{:,.0f}"}), hide_index=True, use_container_width=True)
 
 elif menu.startswith("5"):
     st.markdown('<div class="section-title">■ 검증/대사 > 현장 엑셀 vs ERP 수불부 크로스체크</div>', unsafe_allow_html=True)
